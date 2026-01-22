@@ -208,3 +208,8 @@ __marimo__/
 
 #MacOS Files
 .DS_Store
+
+#Virtual Env.
+venv/
+my_venv/
+.env/
