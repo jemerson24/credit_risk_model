@@ -1,3 +1,4 @@
+# model_service.py
 import os
 import json
 import pandas as pd
@@ -10,12 +11,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import GradientBoostingClassifier
 
 import shap
-import dice_ml
+import dice_ml  # imported in your script; not used in your current logic
 
-
+# -----------------------
+# Data loading + training
+# -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "data", "loan_data.csv")
-df = pd.read_csv(DATA_PATH)
 
 rename_map = {
     "person_age": "age",
@@ -34,8 +36,6 @@ rename_map = {
     "loan_status": "loan_status",
 }
 
-df = df.rename(columns=rename_map)
-
 TARGET_COL = "loan_status"
 
 feature_cols = [
@@ -44,101 +44,46 @@ feature_cols = [
     "credit_history", "credit_score", "loan_defaults"
 ]
 
-X = df[feature_cols].copy()
-y = df[TARGET_COL].copy()
-
-X_train, X_holdout, y_train, y_holdout = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
 categorical_features = [
     "gender", "education", "home_ownership", "loan_intent", "loan_defaults"
 ]
-numeric_features = [c for c in feature_cols if c not in categorical_features]
 
-preprocess = ColumnTransformer(
-    transformers=[
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
-        ("num", "passthrough", numeric_features),
-    ]
-)
+def _load_and_train():
+    df = pd.read_csv(DATA_PATH)
+    df = df.rename(columns=rename_map)
 
-model = GradientBoostingClassifier(random_state=42)
+    X = df[feature_cols].copy()
+    y = df[TARGET_COL].copy()
 
-clf = Pipeline(steps=[
-    ("preprocess", preprocess),
-    ("model", model),
-])
+    X_train, X_holdout, y_train, y_holdout = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
-clf.fit(X_train, y_train)
+    numeric_features = [c for c in feature_cols if c not in categorical_features]
 
-def get_float(prompt):
-    while True:
-        try:
-            return float(input(prompt))
-        except ValueError:
-            print("Please enter a number.")
+    preprocess = ColumnTransformer(
+        transformers=[
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+            ("num", "passthrough", numeric_features),
+        ]
+    )
 
-def get_int(prompt):
-    while True:
-        try:
-            return int(input(prompt))
-        except ValueError:
-            print("Please enter an integer.")
+    model = GradientBoostingClassifier(random_state=42)
 
-def get_str(prompt):
-    return input(prompt).strip()
+    clf = Pipeline(steps=[
+        ("preprocess", preprocess),
+        ("model", model),
+    ])
 
-user_instance = {
-    "age": get_int("age: "),
-    "gender": get_str("gender: "),
-    "education": get_str("education: "),
-    "income": get_float("income: "),
-    "emp_exp": get_int("emp_exp (years): "),
-    "home_ownership": get_str("home_ownership: "),
-    "loan_amount": get_float("loan_amount: "),
-    "loan_intent": get_str("loan_intent: "),
-    "loan_rate": get_float("loan_rate: "),
-    "loan_perc_income": get_float("loan_perc_income: "),
-    "credit_history": get_int("credit_history: "),
-    "credit_score": get_int("credit_score: "),
-    "loan_defaults": get_str("loan_defaults (Yes/No): "),
-}
+    clf.fit(X_train, y_train)
+    return df, X_train, clf, numeric_features
 
-X_test = pd.DataFrame([user_instance], columns=feature_cols)
+# Train once at import-time (simple). For production you’d persist with joblib instead.
+df, X_train, clf, numeric_features = _load_and_train()
 
-pred = clf.predict(X_test)[0]
-
-prob_class1 = None
-if hasattr(clf, "predict_proba"):
-    proba = clf.predict_proba(X_test)
-    if proba.shape[1] == 2:
-        prob_class1 = float(proba[0, 1])
-
-X_train_transformed = clf.named_steps["preprocess"].transform(X_train)
-X_test_transformed = clf.named_steps["preprocess"].transform(X_test)
-
-ohe = clf.named_steps["preprocess"].named_transformers_["cat"]
-cat_feature_names = ohe.get_feature_names_out(categorical_features)
-all_feature_names = np.concatenate([cat_feature_names, np.array(numeric_features)])
-
-underlying_model = clf.named_steps["model"]
-explainer = shap.TreeExplainer(underlying_model)
-
-shap_values = explainer.shap_values(X_test_transformed)
-
-if isinstance(shap_values, list) and len(shap_values) == 2:
-    shap_values_to_show = shap_values[1]
-else:
-    shap_values_to_show = shap_values
-
-shap_series = (
-    pd.Series(shap_values_to_show.flatten(), index=all_feature_names)
-      .sort_values(key=np.abs, ascending=False)
-)
-
-fixed_features = ["age", "gender", "loan_defaults"]
-
+# -----------------------
+# Explanation helpers
+# -----------------------
 def _shap_fallback_on_feature_cols(shap_series, feature_cols, fixed_features):
     impact = {}
     for col in feature_cols:
@@ -199,55 +144,101 @@ def _suggest_directional_changes(target_class, X_test, feature_cols, numeric_fea
 
     return pd.Series({k: v for k, v in suggestions}).sort_values(ascending=False)
 
-dice_impact_series = _shap_fallback_on_feature_cols(shap_series, feature_cols, fixed_features)
+# -----------------------
+# Public internal "API"
+# -----------------------
+def build_payload(user_instance: dict, fixed_features=None, shap_top_k: int = 10, dice_top_k: int = 10) -> dict:
+    """
+    Takes a raw user_instance dict with keys == feature_cols.
+    Returns the JSON-serializable api_payload you used in your original script.
+    """
+    if fixed_features is None:
+        fixed_features = ["age", "gender", "loan_defaults"]
 
-if dice_impact_series.empty:
-    dice_impact_series = _suggest_directional_changes(1, X_test, feature_cols, numeric_features, fixed_features, clf, df)
+    # Ensure column order is stable
+    X_test = pd.DataFrame([user_instance], columns=feature_cols)
 
-shap_top_k = 10
-dice_top_k = 10
+    pred = clf.predict(X_test)[0]
 
-shap_items = []
-for feat, val in shap_series.head(shap_top_k).items():
-    effect = "increases_class_1" if val > 0 else "decreases_class_1"
-    shap_items.append({"feature": str(feat), "effect": effect, "value": float(val)})
+    prob_class1 = None
+    if hasattr(clf, "predict_proba"):
+        proba = clf.predict_proba(X_test)
+        if proba.shape[1] == 2:
+            prob_class1 = float(proba[0, 1])
 
-dice_items = []
-for feat, val in dice_impact_series.head(dice_top_k).items():
-    dice_items.append({"feature": str(feat), "impact_score": float(val)})
+    # Transform (same as your script)
+    X_train_transformed = clf.named_steps["preprocess"].transform(X_train)
+    X_test_transformed = clf.named_steps["preprocess"].transform(X_test)
 
-api_payload = {
-    "application_id": None,
-    "model": {
-        "name": "GradientBoostingClassifier",
-        "version": "local",
-        "target": TARGET_COL,
-        "positive_class": 1
-    },
-    "prediction": {
-        "loan_status": int(pred) if isinstance(pred, (int, np.integer)) else pred,
-        "probability_class_1": prob_class1
-    },
-    "explanations": {
-        "shap": {
-            "top_drivers": shap_items,
-            "units": "model_output_space",
-            "note": "Values are local contributions for this single instance."
+    # Feature names for OHE
+    ohe = clf.named_steps["preprocess"].named_transformers_["cat"]
+    cat_feature_names = ohe.get_feature_names_out(categorical_features)
+    all_feature_names = np.concatenate([cat_feature_names, np.array(numeric_features)])
+
+    # SHAP
+    underlying_model = clf.named_steps["model"]
+    explainer = shap.TreeExplainer(underlying_model)
+    shap_values = explainer.shap_values(X_test_transformed)
+
+    if isinstance(shap_values, list) and len(shap_values) == 2:
+        shap_values_to_show = shap_values[1]
+    else:
+        shap_values_to_show = shap_values
+
+    shap_series = (
+        pd.Series(shap_values_to_show.flatten(), index=all_feature_names)
+          .sort_values(key=np.abs, ascending=False)
+    )
+
+    # Your "dice impact" ranking logic (fallback)
+    dice_impact_series = _shap_fallback_on_feature_cols(shap_series, feature_cols, fixed_features)
+    if dice_impact_series.empty:
+        dice_impact_series = _suggest_directional_changes(
+            1, X_test, feature_cols, numeric_features, fixed_features, clf, df
+        )
+
+    # Pack into items (same structure)
+    shap_items = []
+    for feat, val in shap_series.head(shap_top_k).items():
+        effect = "increases_class_1" if val > 0 else "decreases_class_1"
+        shap_items.append({"feature": str(feat), "effect": effect, "value": float(val)})
+
+    dice_items = []
+    for feat, val in dice_impact_series.head(dice_top_k).items():
+        dice_items.append({"feature": str(feat), "impact_score": float(val)})
+
+    api_payload = {
+        "application_id": None,
+        "model": {
+            "name": "GradientBoostingClassifier",
+            "version": "local",
+            "target": TARGET_COL,
+            "positive_class": 1
         },
-        "dice_impact": {
-            "goal": {
-                "target_class": 1,
-                "fixed_features": fixed_features
+        "prediction": {
+            "loan_status": int(pred) if isinstance(pred, (int, np.integer)) else pred,
+            "probability_class_1": prob_class1
+        },
+        "explanations": {
+            "shap": {
+                "top_drivers": shap_items,
+                "units": "model_output_space",
+                "note": "Values are local contributions for this single instance."
             },
-            "ranked_levers": dice_items,
-            "method": "impact-ranking",
-            "note": "Impact scores rank which features most influence moving toward class 1; not guaranteed to flip outcome."
+            "dice_impact": {
+                "goal": {
+                    "target_class": 1,
+                    "fixed_features": fixed_features
+                },
+                "ranked_levers": dice_items,
+                "method": "impact-ranking",
+                "note": "Impact scores rank which features most influence moving toward class 1; not guaranteed to flip outcome."
+            }
+        },
+        "validation": {
+            "normalized_features": user_instance,
+            "warnings": []
         }
-    },
-    "validation": {
-        "normalized_features": user_instance,
-        "warnings": []
     }
-}
 
-print(json.dumps(api_payload, indent=2))
+    return api_payload
