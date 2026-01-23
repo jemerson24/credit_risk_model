@@ -148,17 +148,15 @@ def generate_assistant_explanation(payload: Dict[str, Any]) -> str:
         "Do not use numbered lists or section headers. Keep it concise.\n"
     )
 
-    resp = client.responses.create(
+    resp = client.chat.completions.create(
         model=DEFAULT_MODEL,
-        input=[
+        messages=[
             {"role": "system", "content": system_instructions},
             {"role": "user", "content": user_message},
         ],
     )
 
-    return resp.output_text
-
-
+    return resp.choices[0].message.content
 
 
 if __name__ == "__main__":
