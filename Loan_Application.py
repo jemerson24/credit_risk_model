@@ -84,7 +84,7 @@ with st.sidebar:
         st.session_state["threshold"] = float(best_threshold)
 
     threshold = st.slider(
-        "Decision threshold",
+        "Decision threshold (Risk Tolerance)",
         min_value=0.0,
         max_value=1.0,
         value=float(st.session_state.get("threshold", best_threshold)),
