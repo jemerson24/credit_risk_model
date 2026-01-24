@@ -7,10 +7,11 @@ from loan_assistant import generate_assistant_explanation
 
 st.set_page_config(page_title="Loan Risk Assistant", page_icon="💳", layout="centered")
 
-st.title("💳 Loan Application Assistant") 
-st.write( "Enter your application details below. After you submit, the model will estimate the outcome " 
-         "and the assistant will explain the key factors in plain language." )
-
+st.title("💳 Loan Application Assistant")
+st.write(
+    "Enter your application details below. After you submit, the model will estimate the outcome "
+    "and the assistant will explain the key factors in plain language."
+)
 
 # ---- Feature config ----
 DROPDOWN_OPTIONS = {
@@ -43,21 +44,29 @@ def opt_index(options, default_value):
 with st.sidebar:
     st.subheader("Decision settings")
 
+    # ✅ Shared across pages (optional): store in session_state
+    if "profit_per_good_loan" not in st.session_state:
+        st.session_state["profit_per_good_loan"] = 10000.0
+    if "loss_per_default" not in st.session_state:
+        st.session_state["loss_per_default"] = 80000.0
+
     profit_per_good_loan = st.number_input(
         "Profit per good loan",
         min_value=0.0,
-        value=10000.0,
+        value=float(st.session_state["profit_per_good_loan"]),
         step=1000.0,
         help="Used to compute the profit-optimal default threshold."
     )
+    st.session_state["profit_per_good_loan"] = float(profit_per_good_loan)
 
     loss_per_default = st.number_input(
         "Loss per default",
         min_value=0.0,
-        value=80000.0,
+        value=float(st.session_state["loss_per_default"]),
         step=5000.0,
         help="Used to compute the profit-optimal default threshold."
     )
+    st.session_state["loss_per_default"] = float(loss_per_default)
 
     # Compute the best threshold for current profit/loss
     best_threshold, best_row = get_profit_optimal_threshold(
@@ -87,6 +96,7 @@ with st.sidebar:
     st.divider()
 
     show_payload = st.checkbox("Show debug payload (JSON)", value=False)
+
     st.caption("Requires OPENAI_API_KEY in your environment for assistant explanations.")
     if not os.getenv("OPENAI_API_KEY"):
         st.warning("OPENAI_API_KEY not found. The assistant step may fail.")
@@ -197,6 +207,8 @@ if submitted:
     except Exception as e:
         st.error("Assistant generation failed.")
         st.code(str(e))
+
+    st.info("To view overall model performance on the 20% holdout set (X_test/y_test), open **Model Analytics** from the sidebar.")
 
     if show_payload:
         with st.expander("Debug payload (JSON)"):
