@@ -208,6 +208,8 @@ if submitted:
         st.error("Assistant generation failed.")
         st.code(str(e))
 
+    st.write("")
+
     st.info("To view overall model performance, open **Model Analytics** from the sidebar.")
 
     if show_payload:
